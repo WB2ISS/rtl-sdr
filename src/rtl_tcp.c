@@ -17,6 +17,9 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#define ALLOW_UDP
+#define MODIFIED_VERSION_STRING ("modified by rhn on 2019-01-23 05:31pm\n")
+
 #include <errno.h>
 #include <signal.h>
 #include <string.h>
@@ -101,6 +104,17 @@ void usage(void)
 	exit(1);
 }
 
+#ifdef ALLOW_UDP
+int 	rtlsdr_set_udp_enable(rtlsdr_dev_t *dev, int port);
+void    *udp_connection_wait(void *p);
+int     udp_send_handler(char *dataBuffer, int sz) ;
+struct sockaddr_in6     udp_client_socket;     // use to send data to client
+struct sockaddr_in6     udp_dummy0_socket;      // rcv keep alives
+int             sendUDPflag     =  0;
+int             udp_portNum     = -1;
+int             udp_fd          = -1;
+#endif
+
 #ifdef _WIN32
 int gettimeofday(struct timeval *tv, void* ignored)
 {
@@ -145,7 +159,7 @@ static void sighandler(int signum)
 
 void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
 {
-	if(!do_exit) {
+	if (!do_exit) {
 		struct llist *rpt = (struct llist*)malloc(sizeof(struct llist));
 		rpt->data = (char*)malloc(len);
 		memcpy(rpt->data, buf, len);
@@ -165,7 +179,7 @@ void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
 				num_queued++;
 			}
 
-			if(llbuf_num && llbuf_num == num_queued-2){
+			if (llbuf_num && llbuf_num == num_queued-2) {
 				struct llist *curelem;
 
 				free(ll_buffers->data);
@@ -192,22 +206,22 @@ static void *tcp_worker(void *arg)
 {
 	struct llist *curelem,*prev;
 	int bytesleft,bytessent, index;
-	struct timeval tv= {1,0};
+	struct timeval tv = {1,0};
 	struct timespec ts;
 	struct timeval tp;
 	fd_set writefds;
 	int r = 0;
 
 	while(1) {
-		if(do_exit)
+		if (do_exit) {
 			pthread_exit(0);
-
+		}
 		pthread_mutex_lock(&ll_mutex);
 		gettimeofday(&tp, NULL);
 		ts.tv_sec  = tp.tv_sec+5;
 		ts.tv_nsec = tp.tv_usec * 1000;
 		r = pthread_cond_timedwait(&cond, &ll_mutex, &ts);
-		if(r == ETIMEDOUT) {
+		if (r == ETIMEDOUT) {
 			pthread_mutex_unlock(&ll_mutex);
 			printf("worker cond timeout\n");
 			sighandler(0);
@@ -218,28 +232,49 @@ static void *tcp_worker(void *arg)
 		ll_buffers = 0;
 		pthread_mutex_unlock(&ll_mutex);
 
-		while(curelem != 0) {
+		while (curelem != 0) {
 			bytesleft = curelem->len;
 			index = 0;
 			bytessent = 0;
 			while(bytesleft > 0) {
-				FD_ZERO(&writefds);
-				FD_SET(s, &writefds);
-				tv.tv_sec = 1;
-				tv.tv_usec = 0;
-				r = select(s+1, NULL, &writefds, NULL, &tv);
-				if(r) {
-					bytessent = send(s,  &curelem->data[index], bytesleft, 0);
+#ifdef ALLOW_UDP
+				// UDP UDP
+				if (sendUDPflag != 0 && udp_fd >= 0) {
+            			    bytessent = udp_send_handler(
+					  &curelem->data[index], 
+					  bytesleft); 
+				    if (bytessent > 0) {
+					bytesleft -= bytessent;
+				    	index += bytessent;
+				    }
+        			}
+#else
+				if (0) { }
+#endif
+				else {
+				  FD_ZERO(&writefds);
+				  FD_SET(s, &writefds);
+				  tv.tv_sec = 1;
+				  tv.tv_usec = 0;
+				  r = select(s+1, NULL, &writefds, NULL, &tv);
+				  if (r != 0) {
+					bytessent = send( s,  
+					  &curelem->data[index], 
+					  bytesleft, 
+					  0 );
 					bytesleft -= bytessent;
 					index += bytessent;
+				  } else {
+					// r == 0, so spin in while loop
+				  }
 				}
-				if(bytessent == SOCKET_ERROR || do_exit) {
+				if ((bytessent == SOCKET_ERROR) || do_exit) {
 						printf("worker socket bye\n");
 						sighandler(0);
 						pthread_exit(NULL);
 				}
 			}
-			prev = curelem;
+			prev    = curelem;
 			curelem = curelem->next;
 			free(prev->data);
 			free(prev);
@@ -250,7 +285,7 @@ static void *tcp_worker(void *arg)
 static int set_gain_by_index(rtlsdr_dev_t *_dev, unsigned int index)
 {
 	int res = 0;
-	int* gains;
+	int *gains;
 	int count = rtlsdr_get_tuner_gains(_dev, NULL);
 
 	if (count > 0 && (unsigned int)count > index) {
@@ -258,7 +293,6 @@ static int set_gain_by_index(rtlsdr_dev_t *_dev, unsigned int index)
 		count = rtlsdr_get_tuner_gains(_dev, gains);
 
 		res = rtlsdr_set_tuner_gain(_dev, gains[index]);
-
 		free(gains);
 	}
 
@@ -278,29 +312,32 @@ struct command{
 #endif
 static void *command_worker(void *arg)
 {
-	int left, received = 0;
 	fd_set readfds;
-	struct command cmd={0, 0};
-	struct timeval tv= {1, 0};
+	struct command cmd = {0, 0};
+	struct timeval tv  = {1, 0};
+	int left, received = 0;
 	int r = 0;
 	uint32_t tmp;
 
-	while(1) {
-		left=sizeof(cmd);
-		while(left >0) {
+	while (1) {
+		left = sizeof(cmd);
+		while (left > 0) {
 			FD_ZERO(&readfds);
 			FD_SET(s, &readfds);
 			tv.tv_sec = 1;
 			tv.tv_usec = 0;
 			r = select(s+1, &readfds, NULL, NULL, &tv);
-			if(r) {
-				received = recv(s, (char*)&cmd+(sizeof(cmd)-left), left, 0);
-				left -= received;
+			if (r) {
+			    received = recv(s, 
+				         (char*)&cmd + (sizeof(cmd) - left),
+						left, 
+						0 );
+			    left -= received;
 			}
-			if(received == SOCKET_ERROR || do_exit) {
-				printf("comm recv bye\n");
-				sighandler(0);
-				pthread_exit(NULL);
+			if ((received == SOCKET_ERROR) || do_exit) {
+			    printf("comm recv bye\n");
+			    sighandler(0);
+			    pthread_exit(NULL);
 			}
 		}
 		switch(cmd.cmd) {
@@ -326,8 +363,10 @@ static void *command_worker(void *arg)
 			break;
 		case 0x06:
 			tmp = ntohl(cmd.param);
-			printf("set if stage %d gain %d\n", tmp >> 16, (short)(tmp & 0xffff));
-			rtlsdr_set_tuner_if_gain(dev, tmp >> 16, (short)(tmp & 0xffff));
+			printf("set if stage %d gain %d\n", 
+				tmp >> 16, (short)(tmp & 0xffff));
+			rtlsdr_set_tuner_if_gain(dev, tmp >> 16, 
+				(short)(tmp & 0xffff));
 			break;
 		case 0x07:
 			printf("set test mode %d\n", ntohl(cmd.param));
@@ -354,13 +393,20 @@ static void *command_worker(void *arg)
 			rtlsdr_set_xtal_freq(dev, 0, ntohl(cmd.param));
 			break;
 		case 0x0d:
-			printf("set tuner gain by index %d\n", ntohl(cmd.param));
+			printf("set tuner gain by index %d\n", 
+				ntohl(cmd.param));
 			set_gain_by_index(dev, ntohl(cmd.param));
 			break;
 		case 0x0e:
 			printf("set bias tee %d\n", ntohl(cmd.param));
 			rtlsdr_set_bias_tee(dev, (int)ntohl(cmd.param));
 			break;
+#ifdef ALLOW_UDP
+		case 0x4a:
+			printf("set UDP streaming mode %d\n", ntohl(cmd.param));
+			rtlsdr_set_udp_enable(dev, (int)ntohl(cmd.param));
+			break;
+#endif
 		default:
 			break;
 		}
@@ -436,6 +482,8 @@ int main(int argc, char **argv)
 		}
 	}
 
+	fprintf(stdout, MODIFIED_VERSION_STRING );
+
 	if (argc < optind)
 		usage();
 
@@ -484,20 +532,24 @@ int main(int argc, char **argv)
 	if (0 == gain) {
 		 /* Enable automatic gain */
 		r = rtlsdr_set_tuner_gain_mode(dev, 0);
-		if (r < 0)
-			fprintf(stderr, "WARNING: Failed to enable automatic gain.\n");
+		if (r < 0) {
+			fprintf(stderr, 
+			"WARNING: Failed to enable automatic gain.\n");
+		}
 	} else {
 		/* Enable manual gain */
 		r = rtlsdr_set_tuner_gain_mode(dev, 1);
-		if (r < 0)
-			fprintf(stderr, "WARNING: Failed to enable manual gain.\n");
-
+		if (r < 0) {
+			fprintf(stderr, 
+			"WARNING: Failed to enable manual gain.\n");
+		}
 		/* Set the tuner gain */
 		r = rtlsdr_set_tuner_gain(dev, gain);
-		if (r < 0)
-			fprintf(stderr, "WARNING: Failed to set tuner gain.\n");
-		else
-			fprintf(stderr, "Tuner gain set to %f dB.\n", gain/10.0);
+		if (r < 0) {
+		    fprintf(stderr, "WARNING: Failed to set tuner gain.\n");
+		} else {
+		    fprintf(stderr, "Tuner gain set to %f dB.\n", gain/10.0);
+		}
 	}
 
 	rtlsdr_set_bias_tee(dev, enable_biastee);
@@ -522,8 +574,10 @@ int main(int argc, char **argv)
 
 	listensocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	r = 1;
-	setsockopt(listensocket, SOL_SOCKET, SO_REUSEADDR, (char *)&r, sizeof(int));
-	setsockopt(listensocket, SOL_SOCKET, SO_LINGER, (char *)&ling, sizeof(ling));
+	setsockopt(listensocket, SOL_SOCKET, SO_REUSEADDR, 
+			(char *)&r, sizeof(int));
+	setsockopt(listensocket, SOL_SOCKET, SO_LINGER, 
+			(char *)&ling, sizeof(ling));
 	bind(listensocket,(struct sockaddr *)&local,sizeof(local));
 
 #ifdef _WIN32
@@ -540,24 +594,29 @@ int main(int argc, char **argv)
 		       "to receive samples in GRC and control "
 		       "rtl_tcp parameters (frequency, gain, ...).\n",
 		       addr, port);
+
 		listen(listensocket,1);
 
-		while(1) {
+		while (1) {
 			FD_ZERO(&readfds);
 			FD_SET(listensocket, &readfds);
 			tv.tv_sec = 1;
 			tv.tv_usec = 0;
 			r = select(listensocket+1, &readfds, NULL, NULL, &tv);
-			if(do_exit) {
+			if (do_exit) {
 				goto out;
-			} else if(r) {
+			} else if (r) {
 				rlen = sizeof(remote);
-				s = accept(listensocket,(struct sockaddr *)&remote, &rlen);
+				s = accept(listensocket,
+				    (struct sockaddr *)&remote, 
+				    &rlen);
 				break;
 			}
 		}
 
-		setsockopt(s, SOL_SOCKET, SO_LINGER, (char *)&ling, sizeof(ling));
+		setsockopt( s, 
+		            SOL_SOCKET, SO_LINGER, 
+		            (char *)&ling, sizeof(ling));
 
 		printf("client accepted!\n");
 
@@ -578,8 +637,10 @@ int main(int argc, char **argv)
 
 		pthread_attr_init(&attr);
 		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
-		r = pthread_create(&tcp_worker_thread, &attr, tcp_worker, NULL);
-		r = pthread_create(&command_thread, &attr, command_worker, NULL);
+		r = pthread_create(&tcp_worker_thread, &attr, 
+					tcp_worker, NULL);
+		r = pthread_create(&command_thread, &attr, 
+					command_worker, NULL);
 		pthread_attr_destroy(&attr);
 
 		r = rtlsdr_read_async(dev, rtlsdr_callback, NULL, buf_num, 0);
@@ -614,3 +675,205 @@ out:
 	printf("bye!\n");
 	return r >= 0 ? r : -r;
 }
+
+//
+
+#ifdef ALLOW_UDP
+
+static pthread_t udp_connection_thread;
+static int udp_connection_thread_exists = 0;
+
+int rtlsdr_set_udp_enable(rtlsdr_dev_t *dev, int port) {
+   long int *param = (long int *)malloc(4 * sizeof(long int));
+   int r = port;
+    if ( (r > 0) && (sendUDPflag == 0)
+		 && (udp_connection_thread_exists == 0) ) {
+	udp_portNum =  r;
+	if ( pthread_create( &udp_connection_thread, NULL ,
+	     udp_connection_wait,
+	     (void *)param) < 0 ) {
+	     printf("could not create connection thread \n");
+	} else {
+		udp_connection_thread_exists = 1;
+	        printf("UDP rcv thread created \n");
+	}
+    } else {
+	sendUDPflag  =  0;
+    }
+    return(0);
+}
+
+int 	udp_send_handler(char *dataBuffer, int sz) ;
+int 	get_udp_fd();
+struct sockaddr_in6     udp_server_socket;
+int                     udp_packet_count  =  0;
+
+static fd_set 		uwritefds;
+
+int udp_send_handler(char *dataBuffer, int sz) {
+    struct timeval tv = {1,0};
+    int n =  0;
+
+    if (sendUDPflag != 0 && udp_fd >= 0) {
+	int m      =  0;
+        int r      =  0;
+	int flags  =  0;
+	int pkSize =  1280;	// limited max UDP packet size
+
+	int idx    =  0;
+	while (idx < sz) {
+           if (idx + pkSize > sz) { pkSize = sz - idx; }
+		FD_ZERO(&uwritefds);
+		FD_SET(udp_fd, &uwritefds);
+		tv.tv_sec = 1;
+		tv.tv_usec = 0;
+	   r = select(udp_fd+1, NULL, &uwritefds, NULL, &tv);
+	   m = 0;
+           if (r) {
+		// if (idx == 0) { fprintf(stdout,".");fflush(stdout); }
+             // UDP UDP send
+	     m = sendto( udp_fd, 
+	                 &dataBuffer[idx], 
+		         pkSize, 
+		         flags,
+                         (struct sockaddr *)&udp_client_socket,
+                         sizeof(udp_client_socket) );
+           }
+	   if (r == 0) {
+		break;
+	   }
+           if (m < 0) { 
+	   	break; 
+	   } else if (m > 0) { 
+		// if (idx == 0) { fprintf(stdout,"+");fflush(stdout); }
+	      udp_packet_count +=  1;
+	      if (udp_packet_count == 2) {
+                  fprintf(stderr, "sending IQ data via UDP\n"); 
+		  fflush(stderr);
+	      }
+              n   += m; 
+              idx += m;
+	   } 
+        }
+        if (m < 0) {
+           perror("udp sendto error ");
+           fprintf(stderr, "udp sendto error %d %d\n", udp_fd, errno );
+	   fflush(stderr);
+           sendUDPflag = 0;
+	   n = -1;  // SOCKET_ERROR 
+	}
+    }
+    return(n);
+}
+
+static char       dataBuf[1024];
+
+void *udp_connection_wait(void *params) {
+
+    fd_set ureadfds;
+    struct timeval tv = {1,0};
+    int 	 	port2 = udp_portNum;
+
+    int        flags    =  0;
+    int        length   =  0;
+    int 	r 	=  0;
+    socklen_t   len6    =  sizeof(struct sockaddr_in6);
+
+    bzero(&udp_client_socket, len6);
+    bzero(&udp_dummy0_socket, len6);
+    if (udp_fd < 0) {
+        udp_fd = get_udp_fd();
+	if (udp_fd < 0) { return(NULL); }
+    }
+
+    printf("waiting for UDP message on port %d \n", port2); 
+    while (1) {
+	FD_ZERO(&ureadfds);
+	FD_SET(udp_fd, &ureadfds);
+	tv.tv_sec = 1;
+	tv.tv_usec = 0;
+      r = select(udp_fd+1, &ureadfds, NULL, NULL, &tv);
+      length = 0;
+      if (r > 0) {
+        if (sendUDPflag ==  1) {
+          // receive keep alive packets
+	  length = recvfrom( udp_fd, 
+    	                     dataBuf, 1023, 
+		             flags,
+                             (struct sockaddr *)&udp_dummy0_socket, 
+			     &len6 );
+        } else {
+          // receive client address for sendto
+          length = recvfrom( udp_fd, 
+    	                     dataBuf, 1023, 
+		             flags,
+                             (struct sockaddr *)&udp_client_socket, 
+			     &len6 );
+        }
+      } else {	// select returned zero
+    	usleep(1000*1000L);
+      }
+      if (length < 0) {
+           sendUDPflag = 0;
+	      printf("udp receive error \n");
+	      perror("udp receive ");
+	      break;
+      }
+      if ((length > 0) && (sendUDPflag == 0) ) {
+	char name_buffer[128];
+	int  r;
+	inet_ntop(AF_INET6, &(udp_client_socket.sin6_addr), name_buffer, 127);
+	name_buffer[127] = 0;
+	printf("Received UDP packet length %d from: %s port# %d \n",
+			length,
+			&name_buffer[0],
+			ntohs(udp_client_socket.sin6_port));
+	sendUDPflag =  1;
+	udp_packet_count =  0;
+	// needed for UDP UDP ?
+	r = fcntl(udp_fd, F_GETFL, 0);
+	r = fcntl(udp_fd, F_SETFL, r | O_NONBLOCK);
+      }
+    } // while 1
+    // return(&udp_client_socket);
+    udp_connection_thread_exists = 0;
+    pthread_exit(NULL);
+    return(NULL);
+}
+
+static struct linger lin;
+static unsigned int size_lin = sizeof(lin);
+
+int get_udp_fd() {
+    struct sockaddr_in6  my_addr;
+    int  enable;
+    int  port =  udp_portNum;
+    int	 fd   = -1;
+
+    if ( (fd = socket(AF_INET6, SOCK_DGRAM, 0)) < 0 ) {
+        perror( "socket failed" );
+	return(-1);
+    } else {
+	memset( &my_addr, 0, sizeof(my_addr) );
+        my_addr.sin6_flowinfo    =  0;
+        my_addr.sin6_family      =  AF_INET6;
+        my_addr.sin6_port        =  htons( port );
+        my_addr.sin6_addr        =  in6addr_any;
+
+        if ( bind(fd, (struct sockaddr *)&my_addr, sizeof(my_addr)) < 0 ) {
+            perror( "bind failed" );
+            return(-1);
+        }
+
+        enable 	     = 1;
+	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int));
+        lin.l_onoff  = 1;
+        lin.l_linger = 0;
+        setsockopt(fd, SOL_SOCKET, SO_LINGER, (void *)(&lin), size_lin);
+    }
+    return(fd);
+}
+
+#endif // ALLOW_UDP
+
+// eof
