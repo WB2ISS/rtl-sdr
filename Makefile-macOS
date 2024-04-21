@@ -58,25 +58,25 @@ rtl_tcp:			$(SRCDIR)/rtl_tcp.c
 										 -target arm64-apple-macos12 -lm -o rtl_tcp-arm64
 
 								lipo -create -output rtl_tcp rtl_tcp-x86_64 rtl_tcp-arm64
-                lipo -archs rtl_tcp
+								lipo -archs rtl_tcp
 								otool -L rtl_tcp
 
 
-dmg:						rtl_tcp
+dmg:			     rtl_tcp
 
-                 mkdir $(FOLDER)
-                 # Place Universal Binary Executable in Folder
-                 cp $(EXECUTABLE) $(FOLDER)
-                 # Codesign Executable
-                 codesign -vf --timestamp --options runtime --sign "Developer ID Application: Transition Technology Ventures, LLC (6V82P5ET42)" $(FOLDER)/$(EXECUTABLE)
-                 # Create .dmg from the Folder
-                 hdiutil create -fs HFS+ -srcfolder $(FOLDER) -volname $(FOLDER) $(FOLDER).dmg
-                 # Codesign .dmg
-                 codesign -vf --timestamp --options runtime --sign "Developer ID Application: Transition Technology Ventures, LLC (6V82P5ET42)" $(DMG)
-                 codesign --verify --verbose $(DMG)
-                 # Notarize .dmg
-                 xcrun notarytool submit $(DMG) --keychain-profile "SDR" --wait
-                 spctl -a -t open --context context:primary-signature -v $(DMG)
-                 # Staple Ticket to .dmg and Validate
-                 xcrun stapler staple  xcrun stapler $(DMG)
-                 xcrun stapler validate $(DMG)
+								mkdir $(FOLDER)
+								# Place Universal Binary Executable in Folder
+								cp $(EXECUTABLE) $(FOLDER)
+								# Codesign Executable
+								codesign -vf --timestamp --options runtime --sign "Developer ID Application: Transition Technology Ventures, LLC (6V82P5ET42)" $(FOLDER)/$(EXECUTABLE)
+								# Create .dmg from the Folder
+								hdiutil create -fs HFS+ -srcfolder $(FOLDER) -volname $(FOLDER) $(FOLDER).dmg
+								# Codesign .dmg
+								codesign -vf --timestamp --options runtime --sign "Developer ID Application: Transition Technology Ventures, LLC (6V82P5ET42)" $(DMG)
+								codesign --verify --verbose $(DMG)
+								# Notarize .dmg
+								xcrun notarytool submit $(DMG) --keychain-profile "SDR" --wait
+								spctl -a -t open --context context:primary-signature -v $(DMG)
+								# Staple Ticket to .dmg and Validate
+								xcrun stapler staple  xcrun stapler $(DMG)
+								xcrun stapler validate $(DMG)
