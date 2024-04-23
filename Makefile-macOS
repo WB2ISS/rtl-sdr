@@ -10,11 +10,12 @@
 
 
 
-LIBUSBINCLUDEDIR    = ../../libusb-1.0.26/libusb
 LIBUSBSTATICDIRx86  = ../../libusb-1.0.26/build-static-x86_64-macos12
 LIBUSBSTATICDIRARM  = ../../libusb-1.0.26/build-static-arm64-macos12
+LIBUSBINCLUDE				= ../../libusb-1.0.26/libusb
 
-SRCDIR = ../src
+SRCDIR      = ../src
+INCLUDEDIR  = ../include
 
 SOURCE    =   $(SRCDIR)/rtl_tcp.c \
               $(SRCDIR)/librtlsdr.c \
@@ -44,7 +45,8 @@ rtl_tcp:			$(SRCDIR)/rtl_tcp.c
 							      -framework IOKit  \
 										-framework Security \
 										-I. \
-										-I$(SRCDIR)/../include \
+										-I$(LIBUSBINCLUDE) \
+										-I$(INCLUDEDIR) \
 										-L/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include \
 							      -target x86_64-apple-macos12 -lm -o rtl_tcp-x86_64
 
@@ -53,7 +55,8 @@ rtl_tcp:			$(SRCDIR)/rtl_tcp.c
 										 -framework IOKit  \
 										 -framework Security \
 										 -I. \
-										 -I$(SRCDIR)/../include \
+										 -I$(LIBUSBINCLUDE) \
+										 -I$(INCLUDEDIR) \
 										 -L/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include \
 										 -target arm64-apple-macos12 -lm -o rtl_tcp-arm64
 
