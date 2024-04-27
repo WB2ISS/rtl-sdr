@@ -96,8 +96,9 @@ pkg:						rtl_tcp
 								 cp $(EXECUTABLE)	$(FOLDER)-pkg
 								 codesign -vf --timestamp --options runtime --sign $(SIGNID) $(FOLDER)-pkg/$(EXECUTABLE)
 								 pkgbuild --root ./$(FOLDER)-pkg \
+								 					--identifier $(EXECUTABLE) \
 								 					--install-location $(INSTALL) \
-								 					--sign $(INSTALLID) \  
+								 					--sign $(INSTALLID) \
 													$(PKG)
 								 pkgutil --check-signature $(PKG)
 								 xcrun notarytool submit $(PKG) --keychain-profile "SDR" --wait
