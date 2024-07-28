@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="1">
+    <pkg-ref id="rtl_tcp"/>
+    <readme file="rtl_tcp-license.rtf" mime-type="application/rtf"/>
+    <options customize="never" require-scripts="false" hostArchitectures="x86_64,arm64"/>
+    <choices-outline>
+        <line choice="default">
+            <line choice="rtl_tcp"/>
+        </line>
+    </choices-outline>
+    <choice id="default"/>
+    <choice id="rtl_tcp" visible="false">
+        <pkg-ref id="rtl_tcp"/>
+    </choice>
+    <pkg-ref id="rtl_tcp" version="0" onConclusion="none">rtl_tcp-2.0.1-macos12-L.pkg</pkg-ref>
+</installer-gui-script>
