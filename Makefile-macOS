@@ -6,7 +6,7 @@
 # rm -rf build
 # mkdir build
 # cd build
-# make -f ../Makefile-macOS
+# make -f ../Makefile-macOS [rtl_tcp|dmg|pkg|all|clean]
 
 EXECUTABLE  	= rtl_tcp
 VERSION     	= 2.0.1
